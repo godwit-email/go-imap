@@ -1,6 +1,8 @@
 package imapclient
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	netmail "net/mail"
@@ -768,7 +770,7 @@ func (c *Client) handleFetch(seqNum uint32) error {
 				return dec.Err()
 			}
 
-			bodyStruct, err := readBody(dec, &c.options)
+			bodyStruct, err := readBodyLenient(dec, &c.options)
 			if err != nil {
 				return err
 			}
@@ -920,6 +922,51 @@ func parseMsgIDList(s string) ([]string, error) {
 	var h mail.Header
 	h.Set("In-Reply-To", s)
 	return h.MsgIDList("In-Reply-To")
+}
+
+// readBodyLenient reads a body structure that some servers (Gmail) send
+// malformed. The value is copied first and parsed from the copy, so a
+// structure that does not parse yields nil instead of an error that would
+// close the connection. Only a value that is not even a balanced list fails.
+func readBodyLenient(dec *imapwire.Decoder, options *Options) (imap.BodyStructure, error) {
+	var buf bytes.Buffer
+	if !dec.Expect(copyValue(dec, &buf, 0), "body") {
+		return nil, dec.Err()
+	}
+	bs, err := readBody(imapwire.NewDecoder(bufio.NewReader(&buf), imapwire.ConnSideClient), options)
+	if err != nil {
+		return nil, nil
+	}
+	return bs, nil
+}
+
+// copyValue re-encodes the next string, atom or list into buf, strings as
+// literals so their contents need no escaping. A missing SP between list
+// items is tolerated.
+func copyValue(dec *imapwire.Decoder, buf *bytes.Buffer, depth int) bool {
+	var s string
+	switch {
+	case dec.String(&s):
+		fmt.Fprintf(buf, "{%d}\r\n%s", len(s), s)
+		return true
+	case dec.Atom(&s):
+		buf.WriteString(s)
+		return true
+	case depth >= 100 || !dec.Special('('):
+		return false
+	}
+	buf.WriteByte('(')
+	for i := 0; !dec.Special(')'); i++ {
+		if i > 0 {
+			dec.SP()
+			buf.WriteByte(' ')
+		}
+		if !copyValue(dec, buf, depth+1) {
+			return false
+		}
+	}
+	buf.WriteByte(')')
+	return true
 }
 
 func readBody(dec *imapwire.Decoder, options *Options) (imap.BodyStructure, error) {
