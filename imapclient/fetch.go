@@ -103,12 +103,27 @@ func writeFetchItemBodySection(enc *imapwire.Encoder, item *imap.FetchItemBodySe
 
 		if len(headerList) > 0 {
 			enc.SP().List(len(headerList), func(i int) {
-				enc.String(headerList[i])
+				// Tencent Exmail answers a quoted name with an empty section.
+				if isHeaderAtom(headerList[i]) {
+					enc.Atom(headerList[i])
+				} else {
+					enc.String(headerList[i])
+				}
 			})
 		}
 	}
 	enc.Special(']')
 	writeSectionPartial(enc, item.Partial)
+}
+
+// isHeaderAtom reports whether a header field name can be sent as an atom.
+func isHeaderAtom(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x7f || !imapwire.IsAtomChar(s[i]) {
+			return false
+		}
+	}
+	return s != ""
 }
 
 func writeFetchItemBinarySection(enc *imapwire.Encoder, item *imap.FetchItemBinarySection) {
@@ -1212,34 +1227,40 @@ func readBodyFldDsp(dec *imapwire.Decoder, options *Options) (*imap.BodyStructur
 
 func readBodyFldParam(dec *imapwire.Decoder, options *Options) (map[string]string, error) {
 	var (
-		params map[string]string
-		k      string
+		l    []string
+		atom = -1 // index of the one atom allowed in l, for the Tencent Exmail case
 	)
 	err := dec.ExpectNList(func() error {
 		var s string
-		if !dec.ExpectString(&s) {
-			return dec.Err()
-		}
-
-		if k == "" {
-			k = s
-		} else {
-			if params == nil {
-				params = make(map[string]string)
+		if !dec.String(&s) {
+			if !dec.Expect(atom < 0 && dec.Atom(&s), "string") {
+				return dec.Err()
 			}
-			decoded, _ := options.decodeText(s)
-			// TODO: handle error
-
-			params[strings.ToLower(k)] = decoded
-			k = ""
+			atom = len(l)
 		}
-
+		l = append(l, s)
 		return nil
 	})
 	if err != nil {
 		return nil, err
-	} else if k != "" {
+	}
+	// Tencent Exmail sends ("charset " " "utf-8"") for ("charset" "utf-8").
+	if len(l) == 4 && atom == 2 && strings.EqualFold(l[0], "charset ") && l[1] == " " && l[3] == "" {
+		l, atom = []string{l[0][:len("charset")], l[2]}, -1
+	}
+	if atom >= 0 {
+		return nil, fmt.Errorf("in body-fld-param: expected string, got atom %q", l[atom])
+	} else if len(l)%2 != 0 {
 		return nil, fmt.Errorf("in body-fld-param: key without value")
+	}
+
+	var params map[string]string
+	for i := 0; i < len(l); i += 2 {
+		if params == nil {
+			params = make(map[string]string)
+		}
+		// TODO: handle error
+		params[strings.ToLower(l[i])], _ = options.decodeText(l[i+1])
 	}
 	return params, nil
 }
