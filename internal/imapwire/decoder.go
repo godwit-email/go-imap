@@ -64,9 +64,10 @@ type Decoder struct {
 	listDepth int
 	readBytes int64
 
-	// emptyLit is set right after an empty literal, which some servers
-	// (Strato / Open-Xchange) follow without SP: "{0}\r\nUID 42".
-	emptyLit bool
+	// emptyLit is readBytes+1 right after an empty literal, which some
+	// servers (Strato / Open-Xchange) follow without SP: "{0}\r\nUID 42".
+	// A byte peeked and unread since then does not end it.
+	emptyLit int64
 }
 
 // NewDecoder creates a new decoder.
@@ -101,7 +102,6 @@ func (dec *Decoder) readByte() (byte, bool) {
 		return 0, dec.returnErr(fmt.Errorf("imapwire: max size exceeded"))
 	}
 	dec.crlf = false
-	dec.emptyLit = false
 	if dec.literal {
 		return 0, dec.returnErr(fmt.Errorf("imapwire: cannot decode while a literal is open"))
 	}
@@ -153,7 +153,7 @@ func (dec *Decoder) Expect(ok bool, name string) bool {
 }
 
 func (dec *Decoder) SP() bool {
-	emptyLit := dec.emptyLit
+	emptyLit := dec.emptyLit == dec.readBytes+1
 	if dec.acceptByte(' ') {
 		// https://github.com/emersion/go-imap/issues/571
 		b, ok := dec.readByte()
@@ -610,7 +610,10 @@ func (dec *Decoder) LiteralReader() (lit *LiteralReader, nonSync, ok bool) {
 		return nil, false, false
 	}
 	dec.literal = true
-	dec.emptyLit = size == 0
+	dec.emptyLit = 0
+	if size == 0 {
+		dec.emptyLit = dec.readBytes + 1
+	}
 	lit = &LiteralReader{
 		dec:  dec,
 		size: size,

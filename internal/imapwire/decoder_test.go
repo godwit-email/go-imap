@@ -24,6 +24,7 @@ func TestDecoderSPAfterEmptyLiteral(t *testing.T) {
 			t.Fatalf("%q: no literal: %v", tc.in, dec.Err())
 		}
 		io.Copy(io.Discard, lit)
+		dec.Special(')') // a peek, as a list does before SP, keeps the exception
 		if got := dec.SP(); got != tc.sp {
 			t.Errorf("%q: SP() = %v, want %v", tc.in, got, tc.sp)
 		}
