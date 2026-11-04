@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/emersion/go-imap/v2"
+	"github.com/emersion/go-imap/v2/imapclient"
 )
 
 func TestFetch(t *testing.T) {
@@ -64,5 +65,39 @@ func TestFetchPartialOffsetEcho(t *testing.T) {
 	}
 	if messages[0].FindBodySection(bodySection) == nil {
 		t.Errorf("FindBodySection() = nil, want the section the client asked for")
+	}
+}
+
+// Alibaba Mail echoes a HEADER.FIELDS list cut down and reordered; the section
+// still holds the headers it sent, and an exact echo is preferred.
+func TestFindBodySectionReducedHeaderFields(t *testing.T) {
+	asked := &imap.FetchItemBodySection{Specifier: imap.PartSpecifierHeader, Peek: true,
+		HeaderFields: []string{"MESSAGE-ID", "DATE", "SUBJECT", "FROM", "LIST-ID", "DKIM-SIGNATURE"}}
+	hdr := func(part []int, b string, names ...string) imapclient.FetchBodySectionBuffer {
+		return imapclient.FetchBodySectionBuffer{Section: &imap.FetchItemBodySection{
+			Specifier: imap.PartSpecifierHeader, Part: part, HeaderFields: names}, Bytes: []byte(b)}
+	}
+	buf := &imapclient.FetchMessageBuffer{BodySection: []imapclient.FetchBodySectionBuffer{
+		{Section: &imap.FetchItemBodySection{Specifier: imap.PartSpecifierText}, Bytes: []byte("body")},
+		hdr(nil, "reduced", "From", "SUBJECT", "date", "MESSAGE-ID"),
+	}}
+	if got := string(buf.FindBodySection(asked)); got != "reduced" {
+		t.Fatalf("reduced echo: got %q", got)
+	}
+	buf.BodySection = append(buf.BodySection, hdr(nil, "exact", asked.HeaderFields...))
+	if got := string(buf.FindBodySection(asked)); got != "exact" {
+		t.Fatalf("exact echo not preferred: got %q", got)
+	}
+
+	for _, s := range []imapclient.FetchBodySectionBuffer{
+		hdr(nil, "x", "FROM", "TO"), // a name not asked for
+		hdr([]int{2}, "x", "FROM"),  // another part
+		{Section: &imap.FetchItemBodySection{Specifier: imap.PartSpecifierHeader, HeaderFieldsNot: []string{"TO"}}, Bytes: []byte("x")},
+		{Section: &imap.FetchItemBodySection{Specifier: imap.PartSpecifierHeader}, Bytes: []byte("x")},
+	} {
+		buf := &imapclient.FetchMessageBuffer{BodySection: []imapclient.FetchBodySectionBuffer{s}}
+		if got := buf.FindBodySection(asked); got != nil {
+			t.Errorf("%+v matched: %q", s.Section, got)
+		}
 	}
 }

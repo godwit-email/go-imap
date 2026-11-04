@@ -254,6 +254,15 @@ func (cmd *FetchCommand) Collect() ([]*FetchMessageBuffer, error) {
 }
 
 func matchFetchItemBodySection(cmd, resp *imap.FetchItemBodySection) bool {
+	return matchFetchItemBodySectionFields(cmd, resp, true)
+}
+
+// matchFetchItemBodySectionFields is matchFetchItemBodySection, where reduced
+// also accepts a HEADER.FIELDS echo listing a non-empty subset of the requested
+// names, in any order. Alibaba Mail answers HEADER.FIELDS (A B C) with
+// BODY[HEADER.FIELDS (C A)]: it drops some names, present in the message or
+// not, and reorders the rest.
+func matchFetchItemBodySectionFields(cmd, resp *imap.FetchItemBodySection, reduced bool) bool {
 	if cmd.Specifier != resp.Specifier {
 		return false
 	}
@@ -261,7 +270,8 @@ func matchFetchItemBodySection(cmd, resp *imap.FetchItemBodySection) bool {
 	if !intSliceEqual(cmd.Part, resp.Part) {
 		return false
 	}
-	if !stringSliceEqualFold(cmd.HeaderFields, resp.HeaderFields) {
+	if !stringSliceEqualFold(cmd.HeaderFields, resp.HeaderFields) &&
+		!(reduced && len(cmd.HeaderFields) > 0 && stringSubsetFold(resp.HeaderFields, cmd.HeaderFields)) {
 		return false
 	}
 	if !stringSliceEqualFold(cmd.HeaderFieldsNot, resp.HeaderFieldsNot) {
@@ -290,6 +300,27 @@ func intSliceEqual(a, b []int) bool {
 	}
 	for i := range a {
 		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// stringSubsetFold reports whether sub is non-empty and each of its names is
+// in set, ignoring case.
+func stringSubsetFold(sub, set []string) bool {
+	if len(sub) == 0 {
+		return false
+	}
+	for _, s := range sub {
+		found := false
+		for _, t := range set {
+			if strings.EqualFold(s, t) {
+				found = true
+				break
+			}
+		}
+		if !found {
 			return false
 		}
 	}
@@ -581,9 +612,12 @@ func (buf *FetchMessageBuffer) populateItemData(item FetchItemData) error {
 //
 // If the body section is not found, nil is returned.
 func (buf *FetchMessageBuffer) FindBodySection(section *imap.FetchItemBodySection) []byte {
-	for _, s := range buf.BodySection {
-		if matchFetchItemBodySection(section, s.Section) {
-			return s.Bytes
+	// an exact echo first, then a reduced one
+	for _, reduced := range []bool{false, true} {
+		for _, s := range buf.BodySection {
+			if matchFetchItemBodySectionFields(section, s.Section, reduced) {
+				return s.Bytes
+			}
 		}
 	}
 	return nil
