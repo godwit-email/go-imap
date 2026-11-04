@@ -1,0 +1,45 @@
+# Creates a release tag on demand. Cloud agent sessions can push branches but
+# not tags, so they trigger this instead. Tags are never moved or deleted.
+name: tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to create, e.g. v2.0.0-beta.8.godwit.4"
+        required: true
+      sha:
+        description: "Commit to tag (must be on the godwit branch)"
+        required: true
+      message:
+        description: "Tag message"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: godwit
+          fetch-depth: 0
+      - name: Create and push tag
+        env:
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ inputs.sha }}
+          MESSAGE: ${{ inputs.message }}
+        run: |
+          set -eu
+          [[ "$TAG" =~ ^v2\.[0-9]+\.[0-9]+(-[a-z]+\.[0-9]+)?\.godwit\.[0-9]+$ ]] || { echo "bad tag name: $TAG"; exit 1; }
+          [[ "$SHA" =~ ^[0-9a-f]{7,40}$ ]] || { echo "bad sha: $SHA"; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "tag $TAG already exists; tags are never moved"; exit 1
+          fi
+          git merge-base --is-ancestor "$SHA" origin/godwit || { echo "$SHA is not on godwit"; exit 1; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" "$SHA" -m "${MESSAGE:-$TAG}"
+          git push origin "refs/tags/$TAG"
