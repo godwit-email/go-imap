@@ -1,6 +1,10 @@
 package imapclient_test
 
 import (
+	"bufio"
+	"io"
+	"net"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -99,5 +103,45 @@ func TestFindBodySectionReducedHeaderFields(t *testing.T) {
 		if got := buf.FindBodySection(asked); got != nil {
 			t.Errorf("%+v matched: %q", s.Section, got)
 		}
+	}
+}
+
+// Gmail's X-GM-MSGID is a 64-bit number; X-GM-LABELS mixes system labels
+// (\Inbox), atoms and quoted strings.
+func TestFetchGmailExtensions(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer serverConn.Close()
+	reqCh := make(chan string, 1)
+	go func() {
+		io.WriteString(serverConn, "* OK Gimap ready\r\n")
+		req, _ := bufio.NewReader(serverConn).ReadString('\n')
+		reqCh <- req
+		tag, _, _ := strings.Cut(req, " ")
+		io.WriteString(serverConn, `* 1 FETCH (X-GM-MSGID 1278455344230334865 X-GM-LABELS (\Inbox \Sent Important "Muy Importante" "\\Starred") UID 7)`+"\r\n"+
+			`* 2 FETCH (X-GM-LABELS () UID 8)`+"\r\n"+
+			tag+" OK Success\r\n")
+	}()
+	client := imapclient.New(clientConn, nil)
+	defer client.Close()
+
+	msgs, err := client.Fetch(imap.SeqSetNum(1, 2), &imap.FetchOptions{GmailMsgID: true, GmailLabels: true}).Collect()
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if req := <-reqCh; !strings.Contains(req, "X-GM-MSGID") || !strings.Contains(req, "X-GM-LABELS") {
+		t.Errorf("request = %q, want X-GM-MSGID and X-GM-LABELS", req)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("got %d messages, want 2", len(msgs))
+	}
+	if got := msgs[0].GmailMsgID; got != 1278455344230334865 {
+		t.Errorf("GmailMsgID = %d", got)
+	}
+	want := []string{`\Inbox`, `\Sent`, "Important", "Muy Importante", `\Starred`}
+	if got := msgs[0].GmailLabels; !reflect.DeepEqual(got, want) {
+		t.Errorf("GmailLabels = %q, want %q", got, want)
+	}
+	if got := msgs[1].GmailLabels; got == nil || len(got) != 0 || msgs[1].UID != 8 {
+		t.Errorf("empty labels = %#v, UID = %v", got, msgs[1].UID)
 	}
 }

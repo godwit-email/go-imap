@@ -59,6 +59,8 @@ func writeFetchItems(enc *imapwire.Encoder, numKind imapwire.NumKind, options *i
 		"INTERNALDATE":  options.InternalDate,
 		"RFC822.SIZE":   options.RFC822Size,
 		"MODSEQ":        options.ModSeq,
+		"X-GM-MSGID":    options.GmailMsgID,
+		"X-GM-LABELS":   options.GmailLabels,
 	}
 	for k, req := range m {
 		if req {
@@ -527,6 +529,25 @@ type FetchItemDataModSeq struct {
 
 func (FetchItemDataModSeq) fetchItemData() {}
 
+// FetchItemDataGmailMsgID holds data returned by FETCH X-GM-MSGID.
+//
+// This requires the X-GM-EXT-1 extension.
+type FetchItemDataGmailMsgID struct {
+	MsgID uint64
+}
+
+func (FetchItemDataGmailMsgID) fetchItemData() {}
+
+// FetchItemDataGmailLabels holds data returned by FETCH X-GM-LABELS.
+//
+// System labels keep their backslash, e.g. `\Inbox`. This requires the
+// X-GM-EXT-1 extension.
+type FetchItemDataGmailLabels struct {
+	Labels []string
+}
+
+func (FetchItemDataGmailLabels) fetchItemData() {}
+
 // FetchBodySectionBuffer is a buffer for the data returned by
 // FetchItemBodySection.
 type FetchBodySectionBuffer struct {
@@ -555,7 +576,9 @@ type FetchMessageBuffer struct {
 	BodySection       []FetchBodySectionBuffer
 	BinarySection     []FetchBinarySectionBuffer
 	BinarySectionSize []FetchItemDataBinarySectionSize
-	ModSeq            uint64 // requires CONDSTORE
+	ModSeq            uint64   // requires CONDSTORE
+	GmailMsgID        uint64   // requires X-GM-EXT-1
+	GmailLabels       []string // requires X-GM-EXT-1
 }
 
 func (buf *FetchMessageBuffer) populateItemData(item FetchItemData) error {
@@ -602,6 +625,10 @@ func (buf *FetchMessageBuffer) populateItemData(item FetchItemData) error {
 		buf.BinarySectionSize = append(buf.BinarySectionSize, item)
 	case FetchItemDataModSeq:
 		buf.ModSeq = item.ModSeq
+	case FetchItemDataGmailMsgID:
+		buf.GmailMsgID = item.MsgID
+	case FetchItemDataGmailLabels:
+		buf.GmailLabels = item.Labels
 	default:
 		panic(fmt.Errorf("unsupported fetch item data %T", item))
 	}
@@ -852,6 +879,34 @@ func (c *Client) handleFetch(seqNum uint32) error {
 				return dec.Err()
 			}
 			item = FetchItemDataModSeq{ModSeq: modSeq}
+		case "X-GM-MSGID":
+			var id uint64
+			if !dec.ExpectSP() || !dec.ExpectModSeq(&id) {
+				return dec.Err()
+			}
+			item = FetchItemDataGmailMsgID{MsgID: id}
+		case "X-GM-LABELS":
+			if !dec.ExpectSP() {
+				return dec.Err()
+			}
+			labels := []string{} // non-nil: fetched, but the message has no labels
+			err := dec.ExpectList(func() error {
+				// System labels (\Inbox) are sent unquoted, like a flag.
+				system := dec.Special('\\')
+				var label string
+				if !dec.ExpectAString(&label) {
+					return dec.Err()
+				}
+				if system {
+					label = `\` + label
+				}
+				labels = append(labels, label)
+				return nil
+			})
+			if err != nil {
+				return fmt.Errorf("in X-GM-LABELS: %w", err)
+			}
+			item = FetchItemDataGmailLabels{Labels: labels}
 		default:
 			return fmt.Errorf("unsupported msg-att name: %q", attName)
 		}
