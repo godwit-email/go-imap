@@ -7,6 +7,29 @@ import (
 	"github.com/emersion/go-imap/v2/internal/imapwire"
 )
 
+// StoreGmailLabels sends STORE X-GM-LABELS. Requires X-GM-EXT-1.
+func (c *Client) StoreGmailLabels(numSet imap.NumSet, store *imap.StoreGmailLabels) *FetchCommand {
+	cmd := &FetchCommand{numSet: numSet, msgs: make(chan *FetchMessageData, 128)}
+	enc := c.beginCommand(uidCmdName("STORE", imapwire.NumSetKind(numSet)), cmd)
+	enc.SP().NumSet(numSet).SP()
+	switch store.Op {
+	case imap.StoreFlagsSet:
+	case imap.StoreFlagsAdd:
+		enc.Special('+')
+	case imap.StoreFlagsDel:
+		enc.Special('-')
+	default:
+		panic(fmt.Errorf("imapclient: unknown store labels op: %v", store.Op))
+	}
+	enc.Atom("X-GM-LABELS")
+	if store.Silent {
+		enc.Atom(".SILENT")
+	}
+	enc.SP().List(len(store.Labels), func(i int) { enc.Mailbox(store.Labels[i]) })
+	enc.end()
+	return cmd
+}
+
 // Store sends a STORE command.
 //
 // Unless StoreFlags.Silent is set, the server will return the updated values.

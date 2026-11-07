@@ -172,6 +172,9 @@ func writeSearchKey(enc *imapwire.Encoder, criteria *imap.SearchCriteria) {
 	for _, uidSet := range criteria.UID {
 		encodeItem().Atom("UID").SP().NumSet(uidSet)
 	}
+	for _, id := range criteria.GmailMsgID {
+		encodeItem().Atom("X-GM-MSGID").SP().ModSeq(id)
+	}
 
 	if !criteria.Since.IsZero() && !criteria.Before.IsZero() && criteria.Before.Sub(criteria.Since) == 24*time.Hour {
 		encodeItem().Atom("ON").SP().String(criteria.Since.Format(internal.DateLayout))

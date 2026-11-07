@@ -10,6 +10,22 @@ import (
 	"github.com/emersion/go-imap/v2/internal/imapwire"
 )
 
+func TestReadSearchGmailMsgID(t *testing.T) {
+	dec := imapwire.NewDecoder(bufio.NewReader(strings.NewReader("X-GM-MSGID 18000000000000000001\r\n")), imapwire.ConnSideServer)
+	var criteria imap.SearchCriteria
+	if err := readSearchKey(&criteria, dec); err != nil {
+		t.Fatal(err)
+	}
+	if len(criteria.GmailMsgID) != 1 || criteria.GmailMsgID[0] != 18000000000000000001 {
+		t.Fatalf("criteria = %#v", criteria)
+	}
+	var combined imap.SearchCriteria
+	combined.And(&criteria)
+	if len(combined.GmailMsgID) != 1 || combined.GmailMsgID[0] != 18000000000000000001 {
+		t.Fatalf("And lost identity: %#v", combined)
+	}
+}
+
 func TestReadSearchKeyUnknownKey(t *testing.T) {
 	// An unquoted argument with a space leaves "test" as the next key.
 	dec := imapwire.NewDecoder(bufio.NewReader(strings.NewReader("test\r\n")), imapwire.ConnSideServer)

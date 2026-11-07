@@ -205,6 +205,12 @@ func readSearchKeyWithAtom(criteria *imap.SearchCriteria, dec *imapwire.Decoder,
 	switch key {
 	case "ALL":
 		// nothing to do
+	case "X-GM-MSGID":
+		var id uint64
+		if !dec.ExpectSP() || !dec.ExpectModSeq(&id) {
+			return dec.Err()
+		}
+		criteria.GmailMsgID = append(criteria.GmailMsgID, id)
 	case "UID":
 		var uidSet imap.UIDSet
 		if !dec.ExpectSP() || !dec.ExpectUIDSet(&uidSet) {

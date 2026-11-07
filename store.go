@@ -14,6 +14,15 @@ const (
 	StoreFlagsDel
 )
 
+// StoreGmailLabels alters Gmail labels. Requires X-GM-EXT-1.
+// Labels are UTF-8 mailbox names or system labels such as \Inbox.
+// Add and delete preserve labels concurrently added by other clients.
+type StoreGmailLabels struct {
+	Op     StoreFlagsOp
+	Silent bool
+	Labels []string
+}
+
 // StoreFlags alters message flags.
 type StoreFlags struct {
 	Op     StoreFlagsOp
