@@ -173,6 +173,17 @@ func (dec *Decoder) SP() bool {
 	return b == '(' || emptyLit && b >= 'A' && b <= 'Z'
 }
 
+// SPs is like SP, but also reads any further SPs (iCloud sends two in a
+// BODYSTRUCTURE).
+func (dec *Decoder) SPs() bool {
+	if !dec.SP() {
+		return false
+	}
+	for dec.acceptByte(' ') {
+	}
+	return true
+}
+
 func (dec *Decoder) ExpectSP() bool {
 	return dec.Expect(dec.SP(), "SP")
 }

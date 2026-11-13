@@ -1046,7 +1046,7 @@ func readBodyLenient(dec *imapwire.Decoder, options *Options) (imap.BodyStructur
 
 // copyValue re-encodes the next string, atom or list into buf, strings as
 // literals so their contents need no escaping. A missing SP between list
-// items is tolerated.
+// items is tolerated, and so is a run of SPs (iCloud).
 func copyValue(dec *imapwire.Decoder, buf *bytes.Buffer, depth int) bool {
 	var s string
 	switch {
@@ -1062,7 +1062,7 @@ func copyValue(dec *imapwire.Decoder, buf *bytes.Buffer, depth int) bool {
 	buf.WriteByte('(')
 	for i := 0; !dec.Special(')'); i++ {
 		if i > 0 {
-			dec.SP()
+			dec.SPs()
 			buf.WriteByte(' ')
 		}
 		if !copyValue(dec, buf, depth+1) {

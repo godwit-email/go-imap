@@ -19,6 +19,8 @@ func TestReadBodyLenient(t *testing.T) {
 		// https://github.com/emersion/go-imap/issues/701: an empty multipart.
 		{"empty multipart", `(("ALTERNATIVE" ("BOUNDARY" "e7") NIL NIL)("APPLICATION" "PDF" NIL NIL NIL "BASE64" 1476806 NIL ("ATTACHMENT" ("FILENAME" "a.pdf")) NIL) "MIXED" ("BOUNDARY" "7b") NIL NIL)`, false},
 		// https://github.com/emersion/go-imap/issues/659: no SP between strings.
+		// iCloud sends two SPs before the MD5 of a nested message/rfc822 part.
+		{"double space", `(("text" "plain" NIL NIL NIL "7bit" 10 1 NIL NIL NIL NIL)("message" "rfc822" NIL NIL NIL "7bit" 4351 (NIL NIL NIL NIL NIL NIL NIL NIL NIL NIL) ("text" "plain" NIL NIL NIL "7bit" 3 1 NIL NIL NIL NIL) 80  NIL ("ATTACHMENT" ("FILENAME" "mime-attachment")) NIL NIL) "mixed" ("boundary" "x") NIL NIL NIL)`, true},
 		{"adjacent strings", `(("text" "html" ("charset" "UTF-8") NIL NIL "quoted-printable" 1224 16)("application" "octet-stream" ("name" "a.pdf") NIL """" "base64" 65322) "MIXED")`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -29,7 +31,7 @@ func TestReadBodyLenient(t *testing.T) {
 			}
 			if mp, _ := bs.(*imap.BodyStructureMultiPart); (mp != nil) != tc.ok {
 				t.Fatalf("readBodyLenient() = %#v, want parsed: %v", bs, tc.ok)
-			} else if tc.ok && mp.Children[1].(*imap.BodyStructureSinglePart).Description != `a"b` {
+			} else if tc.name == "valid" && mp.Children[1].(*imap.BodyStructureSinglePart).Description != `a"b` {
 				t.Fatalf("literal description = %q", mp.Children[1].(*imap.BodyStructureSinglePart).Description)
 			}
 			var uid uint32
