@@ -2,11 +2,14 @@ package imapclient_test
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"net"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
@@ -143,5 +146,71 @@ func TestFetchGmailExtensions(t *testing.T) {
 	}
 	if got := msgs[1].GmailLabels; got == nil || len(got) != 0 || msgs[1].UID != 8 {
 		t.Errorf("empty labels = %#v, UID = %v", got, msgs[1].UID)
+	}
+}
+
+// timeoutOnceConn fails one Read with a timeout, as a read deadline does when
+// the network stalls, after its first after reads; the conn stays usable.
+type timeoutOnceConn struct {
+	net.Conn
+	after, reads int
+}
+
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "i/o timeout" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
+
+func (c *timeoutOnceConn) Read(b []byte) (int, error) {
+	c.reads++
+	if c.reads == c.after+1 {
+		return 0, timeoutErr{}
+	}
+	return c.Conn.Read(b)
+}
+
+// A read that times out inside a FETCH literal fails the connection: the rest
+// of the literal is mail, never parsed as server responses. Here it holds a
+// line that would read as "* 99 EXISTS".
+func TestFetchLiteralReadTimeout(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer serverConn.Close()
+	lit := "abcde)\r\n* 99 EXISTS\r\n"
+	go func() {
+		io.WriteString(serverConn, "* OK ready\r\n")
+		req, _ := bufio.NewReader(serverConn).ReadString('\n')
+		tag, _, _ := strings.Cut(req, " ")
+		io.WriteString(serverConn, fmt.Sprintf("* 1 FETCH (UID 7 BODY[1] {%d}\r\n%s", len(lit), lit[:5]))
+		io.WriteString(serverConn, lit[5:]+")\r\n"+tag+" OK done\r\n")
+	}()
+	var mu sync.Mutex
+	var injected bool
+	client := imapclient.New(&timeoutOnceConn{Conn: clientConn, after: 2}, &imapclient.Options{
+		UnilateralDataHandler: &imapclient.UnilateralDataHandler{Mailbox: func(data *imapclient.UnilateralDataMailbox) {
+			if data.NumMessages != nil && *data.NumMessages == 99 {
+				mu.Lock()
+				injected = true
+				mu.Unlock()
+			}
+		}},
+	})
+	defer client.Close()
+
+	_, err := client.Fetch(imap.SeqSetNum(1), &imap.FetchOptions{
+		UID: true, BodySection: []*imap.FetchItemBodySection{{Part: []int{1}}},
+	}).Collect()
+	if err == nil {
+		t.Fatal("Fetch succeeded with a literal cut short")
+	}
+	select {
+	case <-client.Closed():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the connection stays open after a literal was cut short")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if injected {
+		t.Fatal("the literal's text was parsed as a server response")
 	}
 }

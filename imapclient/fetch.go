@@ -729,8 +729,9 @@ func (c *Client) handleFetch(seqNum uint32) error {
 		attName = strings.ToUpper(attName)
 
 		var (
-			item FetchItemData
-			done chan struct{}
+			item      FetchItemData
+			done      chan struct{}
+			litReader *fetchLiteralReader
 		)
 		switch attName {
 		case "FLAGS":
@@ -817,10 +818,11 @@ func (c *Client) handleFetch(seqNum uint32) error {
 				var fetchLit imap.LiteralReader
 				if lit != nil {
 					done = make(chan struct{})
-					fetchLit = &fetchLiteralReader{
+					litReader = &fetchLiteralReader{
 						LiteralReader: lit,
 						ch:            done,
 					}
+					fetchLit = litReader
 				}
 
 				switch section := section.(type) {
@@ -924,6 +926,9 @@ func (c *Client) handleFetch(seqNum uint32) error {
 		items <- item
 		if done != nil {
 			<-done
+			if litReader.err != nil {
+				return fmt.Errorf("in literal: %w", litReader.err)
+			}
 			c.setReadTimeout(respReadTimeout)
 		}
 		return nil
@@ -1468,14 +1473,26 @@ func readSectionPart(dec *imapwire.Decoder) (part []int, dot bool) {
 	}
 }
 
+// fetchLiteralReader hands the response reader back the connection once the
+// literal ends. A read error inside the literal (a read deadline when the
+// network stalls is one, and the conn would go on after it) ends it too, but
+// then err keeps it: the rest of the literal is mail, which the response
+// reader must not parse, so it fails the connection instead.
 type fetchLiteralReader struct {
 	*imapwire.LiteralReader
-	ch chan<- struct{}
+	ch  chan<- struct{}
+	err error // set before ch is closed
 }
 
 func (lit *fetchLiteralReader) Read(b []byte) (int, error) {
+	if lit.err != nil {
+		return 0, lit.err
+	}
 	n, err := lit.LiteralReader.Read(b)
 	if err != nil && lit.ch != nil {
+		if err != io.EOF {
+			lit.err = err
+		}
 		close(lit.ch)
 		lit.ch = nil
 	}
