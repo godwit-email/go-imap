@@ -2,6 +2,7 @@ package imapclient
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/internal/imapwire"
@@ -97,7 +98,15 @@ func (c *Client) readID(dec *imapwire.Decoder) (*imap.IDData, error) {
 		return nil, dec.Err()
 	}
 
-	if dec.ExpectNIL() {
+	// NIL or a list. Probing with ExpectNIL would leave its "expected atom"
+	// error on the decoder when the server sends a list: the decoder keeps
+	// its first error, so every later failure on the connection (a dropped
+	// connection, a read timeout) would be reported as that one.
+	var atom string
+	if dec.Atom(&atom) {
+		if !strings.EqualFold(atom, "NIL") {
+			return nil, fmt.Errorf("in id: expected NIL or list, got %q", atom)
+		}
 		return &data, nil
 	}
 
